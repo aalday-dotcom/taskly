@@ -1,25 +1,40 @@
 import { useState, useEffect } from "react";
 
+// ─── Supabase client ───────────────────────────────────────────────
+const SUPABASE_URL = "https://yykfoloinyzonxszhggg.supabase.co";
+const SUPABASE_KEY = "sb_publishable__MQzesNrt7w9NInOJCNbuA_iRrWm3VX";
+
+async function sb(path, options = {}) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+    headers: {
+      "apikey": SUPABASE_KEY,
+      "Authorization": `Bearer ${SUPABASE_KEY}`,
+      "Content-Type": "application/json",
+      "Prefer": options.prefer || "return=representation",
+      ...options.headers,
+    },
+    ...options,
+  });
+  if (!res.ok) { const e = await res.text(); throw new Error(e); }
+  const text = await res.text();
+  return text ? JSON.parse(text) : [];
+}
+
+function dbToTask(t) {
+  return { id: t.id, title: t.title, description: t.description || "", status: t.status, priority: t.priority, assignee: t.assignee, dueDate: t.due_date || "", tags: t.tags || [], createdAt: t.created_at?.slice(0,10) || "" };
+}
+function dbToMember(m) {
+  return { id: m.id, name: m.name, role: m.role || "", email: m.email || "", color: m.color || "#7C6FFF" };
+}
+// ────────────────────────────────────────────────────────────────────
+
 const AVATAR_COLORS = [
   "#FF6B6B","#4ECDC4","#FFE66D","#A29BFE","#FD79A8",
   "#55EFC4","#FDCB6E","#74B9FF","#E17055","#00CEC9"
 ];
 
-const DEFAULT_MEMBERS = [
-  { id: 1, name: "Ana García", role: "Diseñadora", email: "ana@equipo.com", color: "#FF6B6B" },
-  { id: 2, name: "Carlos López", role: "Desarrollador", email: "carlos@equipo.com", color: "#4ECDC4" },
-  { id: 3, name: "María Torres", role: "Marketing", email: "maria@equipo.com", color: "#FFE66D" },
-  { id: 4, name: "Diego Ruiz", role: "DevOps", email: "diego@equipo.com", color: "#A29BFE" },
-  { id: 5, name: "Laura Sanz", role: "Product Manager", email: "laura@equipo.com", color: "#FD79A8" },
-];
-
-const INITIAL_TASKS = [
-  { id: 1, title: "Diseñar nueva landing page", description: "Crear mockups y prototipos en Figma", status: "doing", priority: "high", assignee: 1, dueDate: "2026-05-30", tags: ["diseño", "web"], createdAt: "2026-05-20" },
-  { id: 2, title: "Integrar API de pagos", description: "Implementar Stripe en el checkout", status: "todo", priority: "high", assignee: 2, dueDate: "2026-06-02", tags: ["backend", "pagos"], createdAt: "2026-05-21" },
-  { id: 3, title: "Redactar copy para campaña", description: "Textos para email marketing Q2", status: "done", priority: "medium", assignee: 3, dueDate: "2026-05-25", tags: ["marketing"], createdAt: "2026-05-18" },
-  { id: 4, title: "Revisión de seguridad", description: "Auditoría de vulnerabilidades del sistema", status: "todo", priority: "high", assignee: 4, dueDate: "2026-06-05", tags: ["seguridad"], createdAt: "2026-05-22" },
-  { id: 5, title: "Onboarding nuevos usuarios", description: "Mejorar el flujo de bienvenida", status: "doing", priority: "medium", assignee: 5, dueDate: "2026-06-01", tags: ["ux", "producto"], createdAt: "2026-05-19" },
-];
+const DEFAULT_MEMBERS = [];
+const INITIAL_TASKS = [];
 
 const PRIORITIES = { high: { label: "Alta", color: "#FF6B6B" }, medium: { label: "Media", color: "#FFB347" }, low: { label: "Baja", color: "#4ECDC4" } };
 const COLUMNS = { todo: "Por hacer", doing: "En progreso", done: "Completado" };
@@ -331,9 +346,26 @@ const EMPTY_MEMBER_FORM = { name: "", role: "", email: "", color: AVATAR_COLORS[
 const EMPTY_TASK_FORM = { title: "", description: "", priority: "medium", assignee: null, status: "todo", dueDate: "", tags: "" };
 
 export default function App() {
-  const [members, setMembers] = useState(DEFAULT_MEMBERS);
-  const [tasks, setTasks] = useState(INITIAL_TASKS);
+  const [members, setMembers] = useState([]);
+  const [tasks, setTasks] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [activeNav, setActiveNav] = useState("tasks");
+
+  // ── Load data from Supabase on mount ──
+  useEffect(() => {
+    async function loadData() {
+      try {
+        const [rawMembers, rawTasks] = await Promise.all([
+          sb("members?select=*&order=id"),
+          sb("tasks?select=*&order=id"),
+        ]);
+        setMembers(rawMembers.map(dbToMember));
+        setTasks(rawTasks.map(dbToTask));
+      } catch(e) { console.error("Error cargando datos:", e); }
+      finally { setLoading(false); }
+    }
+    loadData();
+  }, []);
   const [view, setView] = useState("kanban");
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -382,48 +414,74 @@ export default function App() {
   const stats = { total: tasks.length, todo: tasks.filter(t=>t.status==="todo").length, doing: tasks.filter(t=>t.status==="doing").length, done: tasks.filter(t=>t.status==="done").length };
 
   // --- TASK CRUD ---
-  function saveTask() {
+  async function saveTask() {
     if (!taskForm.title.trim()) return;
     const tags = taskForm.tags.split(",").map(s => s.trim()).filter(Boolean);
     const assignee = taskForm.assignee || members[0]?.id;
-    if (typeof taskModal === "object") {
-      setTasks(ts => ts.map(t => t.id === taskModal.id ? { ...taskForm, id: taskModal.id, tags, assignee, createdAt: taskModal.createdAt } : t));
-    } else {
-      setTasks(ts => [...ts, { ...taskForm, id: Date.now(), tags, assignee, createdAt: new Date().toISOString().slice(0,10) }]);
-    }
+    const payload = { title: taskForm.title, description: taskForm.description, status: taskForm.status, priority: taskForm.priority, assignee, due_date: taskForm.dueDate || null, tags };
+    try {
+      if (typeof taskModal === "object") {
+        const [updated] = await sb(`tasks?id=eq.${taskModal.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+        setTasks(ts => ts.map(t => t.id === taskModal.id ? dbToTask(updated) : t));
+      } else {
+        const [created] = await sb("tasks", { method: "POST", body: JSON.stringify(payload) });
+        setTasks(ts => [...ts, dbToTask(created)]);
+      }
+    } catch(e) { console.error("Error guardando tarea:", e); }
     setTaskModal(null);
   }
 
-  function deleteTask(id) { setTasks(ts => ts.filter(t => t.id !== id)); setTaskModal(null); }
+  async function deleteTask(id) {
+    try { await sb(`tasks?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }); }
+    catch(e) { console.error("Error eliminando tarea:", e); }
+    setTasks(ts => ts.filter(t => t.id !== id));
+    setTaskModal(null);
+  }
 
-  function changeStatus(id, status) {
+  async function changeStatus(id, status) {
+    try { await sb(`tasks?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ status }) }); }
+    catch(e) { console.error("Error cambiando estado:", e); }
     setTasks(ts => ts.map(t => t.id === id ? { ...t, status } : t));
     if (typeof taskModal === "object") setTaskModal(m => ({ ...m, status }));
   }
 
   // --- MEMBER CRUD ---
-  function saveMember() {
+  async function saveMember() {
     if (!memberForm.name.trim()) return;
-    if (typeof memberModal === "object") {
-      setMembers(ms => ms.map(m => m.id === memberModal.id ? { ...m, ...memberForm } : m));
-    } else {
-      if (members.length >= 10) return;
-      const newMember = { ...memberForm, id: Date.now() };
-      setMembers(ms => [...ms, newMember]);
-      if (tasks.length === 0 || !taskForm.assignee) setTaskForm(f => ({ ...f, assignee: newMember.id }));
-    }
+    const payload = { name: memberForm.name, role: memberForm.role, email: memberForm.email, color: memberForm.color };
+    try {
+      if (typeof memberModal === "object") {
+        const [updated] = await sb(`members?id=eq.${memberModal.id}`, { method: "PATCH", body: JSON.stringify(payload) });
+        setMembers(ms => ms.map(m => m.id === memberModal.id ? dbToMember(updated) : m));
+      } else {
+        if (members.length >= 10) return;
+        const [created] = await sb("members", { method: "POST", body: JSON.stringify(payload) });
+        const newMember = dbToMember(created);
+        setMembers(ms => [...ms, newMember]);
+        if (!taskForm.assignee) setTaskForm(f => ({ ...f, assignee: newMember.id }));
+      }
+    } catch(e) { console.error("Error guardando miembro:", e); }
     setMemberModal(null);
   }
 
-  function deleteMember(id) {
+  async function deleteMember(id) {
+    try { await sb(`members?id=eq.${id}`, { method: "DELETE", prefer: "return=minimal" }); }
+    catch(e) { console.error("Error eliminando miembro:", e); }
     setMembers(ms => ms.filter(m => m.id !== id));
-    setTasks(ts => ts.map(t => t.assignee === id ? { ...t, assignee: members.find(m => m.id !== id)?.id || null } : t));
+    setTasks(ts => ts.map(t => t.assignee === id ? { ...t, assignee: null } : t));
     setMemberModal(null);
   }
 
   const canAddMember = members.length < 10;
 
   // ---- RENDER ----
+  if (loading) return (
+    <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0A0A0F",flexDirection:"column",gap:16}}>
+      <div style={{width:48,height:48,borderRadius:14,background:"linear-gradient(135deg,#7C6FFF,#FF6B9D)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:800,color:"#0A0A0F",fontFamily:"Syne,sans-serif"}}>T</div>
+      <div style={{color:"#6B6880",fontSize:14,fontFamily:"DM Sans,sans-serif"}}>Cargando Taskly...</div>
+    </div>
+  );
+
   return (
     <>
       <style>{css}</style>
