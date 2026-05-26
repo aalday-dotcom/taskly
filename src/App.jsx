@@ -52,8 +52,35 @@ async function authSignOut(token) {
 // ────────────────────────────────────────────────────────────────────
 
 function dbToTask(t) {
-  return { id: t.id, title: t.title, description: t.description || "", status: t.status, priority: t.priority, assignee: t.assignee, dueDate: t.due_date || "", tags: t.tags || [], createdAt: t.created_at?.slice(0,10) || "" };
+  return { id: t.id, title: t.title, description: t.description || "", status: t.status, priority: t.priority, assignee: t.assignee, assignees: t.assignees || (t.assignee ? [t.assignee] : []), dueDate: t.due_date || "", tags: t.tags || [], attachments: t.attachments || [], createdAt: t.created_at?.slice(0,10) || "" };
 }
+
+// ─── Storage helpers ──────────────────────────────────────────────
+async function uploadFile(file, taskId) {
+  const ext = file.name.split(".").pop();
+  const path = `task-${taskId}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g,"_")}`;
+  const res = await fetch(`${SUPABASE_URL}/storage/v1/object/attachments/${path}`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}`, "Content-Type": file.type || "application/octet-stream" },
+    body: file,
+  });
+  if (!res.ok) { const e = await res.text(); throw new Error(e); }
+  return { name: file.name, path, url: `${SUPABASE_URL}/storage/v1/object/public/attachments/${path}`, size: file.size, type: file.type };
+}
+
+async function deleteFile(path) {
+  await fetch(`${SUPABASE_URL}/storage/v1/object/attachments/${path}`, {
+    method: "DELETE",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${SUPABASE_KEY}` },
+  });
+}
+
+function formatFileSize(bytes) {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1048576) return (bytes/1024).toFixed(1) + " KB";
+  return (bytes/1048576).toFixed(1) + " MB";
+}
+// ─────────────────────────────────────────────────────────────────
 function dbToMember(m) {
   return { id: m.id, name: m.name, role: m.role || "", email: m.email || "", color: m.color || "#7C6FFF" };
 }
@@ -387,6 +414,26 @@ const css = `
     transition: all 0.15s; }
   .auth-signout:hover { background: rgba(255,107,107,0.1); color: #FF6B6B; }
 
+  /* ATTACHMENTS */
+  .attach-list { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
+  .attach-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 10px; }
+  .attach-icon { font-size: 20px; flex-shrink: 0; }
+  .attach-info { flex: 1; min-width: 0; }
+  .attach-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .attach-size { font-size: 11px; color: var(--muted); }
+  .attach-del { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 16px;
+    padding: 2px 6px; border-radius: 6px; transition: all 0.15s; flex-shrink: 0; }
+  .attach-del:hover { background: rgba(255,107,107,0.1); color: #FF6B6B; }
+  .attach-upload-btn { display: flex; align-items: center; gap: 8px; padding: 9px 14px;
+    border: 1.5px dashed var(--border); border-radius: 10px; background: transparent;
+    color: var(--muted); font-size: 13px; cursor: pointer; transition: all 0.15s;
+    font-family: "DM Sans", sans-serif; width: 100%; justify-content: center; }
+  .attach-upload-btn:hover { border-color: #0A3D8F; color: #0A3D8F; }
+  .attach-download { font-size: 11px; color: #0A3D8F; text-decoration: none; padding: 2px 8px;
+    border-radius: 6px; border: 1px solid rgba(10,61,143,0.2); flex-shrink: 0; }
+  .attach-download:hover { background: rgba(10,61,143,0.06); }
+
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -401,7 +448,7 @@ const css = `
 `;
 
 const EMPTY_MEMBER_FORM = { name: "", role: "", email: "", color: AVATAR_COLORS[0] };
-const EMPTY_TASK_FORM = { title: "", description: "", priority: "medium", assignee: null, status: "todo", dueDate: "", tags: "" };
+const EMPTY_TASK_FORM = { title: "", description: "", priority: "medium", assignee: null, assignees: [], status: "todo", dueDate: "", tags: "", attachments: [] };
 
 export default function App() {
   const [members, setMembers] = useState([]);
@@ -485,14 +532,15 @@ export default function App() {
   // Modals
   const [taskModal, setTaskModal] = useState(null); // null | "add" | task object
   const [memberModal, setMemberModal] = useState(null); // null | "add" | member object
+  const [uploadingFile, setUploadingFile] = useState(false);
   const [taskForm, setTaskForm] = useState(EMPTY_TASK_FORM);
   const [memberForm, setMemberForm] = useState(EMPTY_MEMBER_FORM);
 
   useEffect(() => {
     if (taskModal && typeof taskModal === "object") {
-      setTaskForm({ ...taskModal, tags: taskModal.tags.join(", ") });
+      setTaskForm({ ...taskModal, tags: taskModal.tags.join(", "), assignees: taskModal.assignees || (taskModal.assignee ? [taskModal.assignee] : []) });
     } else if (taskModal === "add") {
-      setTaskForm({ ...EMPTY_TASK_FORM, assignee: members[0]?.id || null });
+      setTaskForm({ ...EMPTY_TASK_FORM, assignee: members[0]?.id || null, assignees: members[0]?.id ? [members[0].id] : [] });
     }
   }, [taskModal]);
 
@@ -527,8 +575,9 @@ export default function App() {
   async function saveTask() {
     if (!taskForm.title.trim()) return;
     const tags = taskForm.tags.split(",").map(s => s.trim()).filter(Boolean);
-    const assignee = taskForm.assignee || members[0]?.id;
-    const payload = { title: taskForm.title, description: taskForm.description, status: taskForm.status, priority: taskForm.priority, assignee, due_date: taskForm.dueDate || null, tags };
+    const assignees = taskForm.assignees.length > 0 ? taskForm.assignees : (taskForm.assignee ? [taskForm.assignee] : []);
+    const assignee = assignees[0] || null;
+    const payload = { title: taskForm.title, description: taskForm.description, status: taskForm.status, priority: taskForm.priority, assignee, assignees, due_date: taskForm.dueDate || null, tags, attachments: taskForm.attachments || [] };
     try {
       if (typeof taskModal === "object") {
         const [updated] = await sb(`tasks?id=eq.${taskModal.id}`, { method: "PATCH", body: JSON.stringify(payload) });
@@ -539,6 +588,33 @@ export default function App() {
       }
     } catch(e) { console.error("Error guardando tarea:", e); }
     setTaskModal(null);
+  }
+
+  async function handleFileUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadingFile(true);
+    try {
+      const taskId = typeof taskModal === "object" ? taskModal.id : "new";
+      const attachment = await uploadFile(file, taskId);
+      setTaskForm(f => ({ ...f, attachments: [...(f.attachments||[]), attachment] }));
+    } catch(err) { console.error("Error subiendo archivo:", err); alert("Error al subir archivo. Intenta de nuevo."); }
+    setUploadingFile(false);
+    e.target.value = "";
+  }
+
+  async function removeAttachment(idx) {
+    const att = taskForm.attachments[idx];
+    if (att.path) await deleteFile(att.path).catch(()=>{});
+    setTaskForm(f => ({ ...f, attachments: f.attachments.filter((_,i) => i !== idx) }));
+  }
+
+  function toggleAssignee(id) {
+    setTaskForm(f => {
+      const has = f.assignees.includes(id);
+      const next = has ? f.assignees.filter(x => x !== id) : [...f.assignees, id];
+      return { ...f, assignees: next, assignee: next[0] || null };
+    });
   }
 
   async function deleteTask(id) {
@@ -755,9 +831,12 @@ export default function App() {
                             <div className="task-desc">{task.description}</div>
                             {task.tags.length>0 && <div className="task-tags">{task.tags.map(tag=><span key={tag} className="tag">{tag}</span>)}</div>}
                             <div className="task-footer">
-                              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                {m && <div className="avatar" style={{background:m.color,width:24,height:24,borderRadius:6,fontSize:9}}>{getInitials(m.name)}</div>}
-                                <span style={{fontSize:11,color:"var(--muted)"}}>{m?.name.split(" ")[0]||"—"}</span>
+                              <div style={{display:"flex",alignItems:"center",gap:4}}>
+                                {(task.assignees||[task.assignee]).filter(Boolean).slice(0,3).map((aid,i) => {
+                                  const am = members.find(x=>x.id===aid);
+                                  return am ? <div key={aid} title={am.name} className="avatar" style={{background:am.color,width:24,height:24,borderRadius:6,fontSize:9,marginLeft:i>0?-6:0,border:"2px solid var(--surface)"}}>{getInitials(am.name)}</div> : null;
+                                })}
+                                {(task.assignees||[]).length > 3 && <span style={{fontSize:10,color:"var(--muted)",marginLeft:4}}>+{task.assignees.length-3}</span>}
                               </div>
                               {task.dueDate && <div className={`task-due ${due}`}>{due==="overdue"?"⚠":"📅"} {formatDate(task.dueDate)}</div>}
                             </div>
@@ -789,9 +868,11 @@ export default function App() {
                         <div className="list-title">{task.title}</div>
                         {task.tags.length>0 && <div className="task-tags" style={{marginTop:4}}>{task.tags.map(t=><span key={t} className="tag">{t}</span>)}</div>}
                       </div>
-                      <div style={{display:"flex",alignItems:"center",gap:7}}>
-                        {m && <div className="avatar" style={{background:m.color,width:26,height:26,borderRadius:7,fontSize:9}}>{getInitials(m.name)}</div>}
-                        <span style={{fontSize:12,color:"var(--muted)"}}>{m?.name.split(" ")[0]||"—"}</span>
+                      <div style={{display:"flex",alignItems:"center",gap:4}}>
+                        {(task.assignees||[task.assignee]).filter(Boolean).slice(0,3).map((aid,i) => {
+                          const am = members.find(x=>x.id===aid);
+                          return am ? <div key={aid} title={am.name} className="avatar" style={{background:am.color,width:26,height:26,borderRadius:7,fontSize:9,marginLeft:i>0?-6:0,border:"2px solid var(--surface)"}}>{getInitials(am.name)}</div> : null;
+                        })}
                       </div>
                       <div><span className={`status-badge badge-${task.status}`}>{COLUMNS[task.status]}</span></div>
                       <div style={{color:PRIORITIES[task.priority].color,fontSize:12,fontWeight:600}}>{PRIORITIES[task.priority].label}</div>
@@ -894,18 +975,40 @@ export default function App() {
                   <input className="form-input" placeholder="diseño, backend, ux..." value={taskForm.tags} onChange={e=>setTaskForm(f=>({...f,tags:e.target.value}))}/>
                 </div>
                 <div className="form-group">
-                  <label className="form-label">Asignar a</label>
+                  <label className="form-label">Asignar a (puedes seleccionar varios)</label>
                   {members.length===0
                     ? <div style={{color:"var(--muted)",fontSize:13}}>No hay miembros. Crea uno primero en "Equipo".</div>
                     : <div className="member-grid">
                         {members.map(m=>(
-                          <div key={m.id} className={`member-option ${taskForm.assignee===m.id?"selected":""}`} onClick={()=>setTaskForm(f=>({...f,assignee:m.id}))}>
-                            <div className="avatar" style={{background:m.color,width:36,height:36,borderRadius:10,fontSize:11}}>{getInitials(m.name)}</div>
+                          <div key={m.id} className={`member-option ${(taskForm.assignees||[]).includes(m.id)?"selected":""}`} onClick={()=>toggleAssignee(m.id)}>
+                            <div style={{position:"relative"}}>
+                              <div className="avatar" style={{background:m.color,width:36,height:36,borderRadius:10,fontSize:11}}>{getInitials(m.name)}</div>
+                              {(taskForm.assignees||[]).includes(m.id) && <div style={{position:"absolute",top:-4,right:-4,width:14,height:14,borderRadius:"50%",background:"#0A3D8F",color:"white",fontSize:9,display:"flex",alignItems:"center",justifyContent:"center",fontWeight:800}}>✓</div>}
+                            </div>
                             <span className="member-option-name">{m.name.split(" ")[0]}</span>
                           </div>
                         ))}
                       </div>
                   }
+                </div>
+                <div className="form-group">
+                  <label className="form-label">Archivos adjuntos</label>
+                  <div className="attach-list">
+                    {(taskForm.attachments||[]).map((att,i) => (
+                      <div key={i} className="attach-item">
+                        <span className="attach-icon">{att.type?.includes("image")?"🖼️":att.type?.includes("pdf")?"📄":att.type?.includes("sheet")||att.name?.includes(".xls")?"📊":att.type?.includes("word")||att.name?.includes(".doc")?"📝":"📎"}</span>
+                        <div className="attach-info">
+                          <div className="attach-name">{att.name}</div>
+                          <div className="attach-size">{formatFileSize(att.size||0)}</div>
+                        </div>
+                        <button className="attach-del" onClick={()=>removeAttachment(i)}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                  <label className="attach-upload-btn" style={{marginTop:(taskForm.attachments||[]).length>0?8:0,cursor:uploadingFile?"not-allowed":"pointer"}}>
+                    <input type="file" style={{display:"none"}} onChange={handleFileUpload} disabled={uploadingFile}/>
+                    {uploadingFile ? "⏳ Subiendo..." : "📎 Adjuntar archivo"}
+                  </label>
                 </div>
                 <div className="btn-row">
                   <button className="btn-cancel" onClick={()=>setTaskModal(null)}>Cancelar</button>
@@ -939,11 +1042,16 @@ export default function App() {
                 <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
                   <div className="detail-field">
                     <div className="detail-field-label">Asignado a</div>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
-                      {getMember(taskModal.assignee) && <>
-                        <div className="avatar" style={{background:getMember(taskModal.assignee).color,width:32,height:32,borderRadius:9,fontSize:11}}>{getInitials(getMember(taskModal.assignee).name)}</div>
-                        <span style={{fontSize:14}}>{getMember(taskModal.assignee).name}</span>
-                      </>}
+                    <div style={{display:"flex",flexWrap:"wrap",gap:8,marginTop:6}}>
+                      {(taskModal.assignees||[taskModal.assignee]).filter(Boolean).map(aid => {
+                        const am = getMember(aid);
+                        return am ? (
+                          <div key={aid} style={{display:"flex",alignItems:"center",gap:6,background:"var(--surface2)",borderRadius:8,padding:"4px 10px"}}>
+                            <div className="avatar" style={{background:am.color,width:24,height:24,borderRadius:7,fontSize:9}}>{getInitials(am.name)}</div>
+                            <span style={{fontSize:13}}>{am.name.split(" ")[0]}</span>
+                          </div>
+                        ) : null;
+                      })}
                     </div>
                   </div>
                   <div className="detail-field">
@@ -959,6 +1067,23 @@ export default function App() {
                   <div className="detail-field">
                     <div className="detail-field-label">Etiquetas</div>
                     <div className="task-tags" style={{marginTop:6}}>{taskModal.tags.map(t=><span key={t} className="tag">{t}</span>)}</div>
+                  </div>
+                )}
+                {(taskModal.attachments||[]).length>0 && (
+                  <div className="detail-field">
+                    <div className="detail-field-label">Archivos adjuntos</div>
+                    <div className="attach-list" style={{marginTop:6}}>
+                      {taskModal.attachments.map((att,i) => (
+                        <div key={i} className="attach-item">
+                          <span className="attach-icon">{att.type?.includes("image")?"🖼️":att.type?.includes("pdf")?"📄":att.type?.includes("sheet")||att.name?.includes(".xls")?"📊":att.type?.includes("word")||att.name?.includes(".doc")?"📝":"📎"}</span>
+                          <div className="attach-info">
+                            <div className="attach-name">{att.name}</div>
+                            <div className="attach-size">{formatFileSize(att.size||0)}</div>
+                          </div>
+                          <a href={att.url} target="_blank" rel="noopener noreferrer" className="attach-download">⬇ Descargar</a>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
                 <div className="btn-row">
