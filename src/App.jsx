@@ -20,6 +20,37 @@ async function sb(path, options = {}) {
   return text ? JSON.parse(text) : [];
 }
 
+// ─── Auth helpers ─────────────────────────────────────────────────
+async function authSignUp(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || data.msg || "Error al registrar");
+  return data;
+}
+
+async function authSignIn(email, password) {
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (data.error || data.error_description) throw new Error(data.error_description || data.error || "Credenciales incorrectas");
+  return data; // { access_token, user, ... }
+}
+
+async function authSignOut(token) {
+  await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` },
+  });
+}
+// ────────────────────────────────────────────────────────────────────
+
 function dbToTask(t) {
   return { id: t.id, title: t.title, description: t.description || "", status: t.status, priority: t.priority, assignee: t.assignee, dueDate: t.due_date || "", tags: t.tags || [], createdAt: t.created_at?.slice(0,10) || "" };
 }
@@ -329,6 +360,35 @@ const css = `
   .mf-pill-doing { background: rgba(124,111,255,0.2); color: var(--accent); }
   .mf-pill-done { background: rgba(80,227,164,0.2); color: var(--green); }
 
+  /* AUTH SCREEN */
+  .auth-screen { min-height: 100vh; background: var(--bg); display: flex; align-items: center;
+    justify-content: center; padding: 20px; }
+  .auth-card { background: var(--surface); border: 1px solid var(--border); border-radius: 24px;
+    padding: 40px 36px; width: 100%; max-width: 400px; }
+  .auth-logo { display: flex; align-items: center; gap: 10px; justify-content: center;
+    margin-bottom: 32px; }
+  .auth-logo-dot { width: 36px; height: 36px; border-radius: 10px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    display: flex; align-items: center; justify-content: center;
+    font-family: 'Syne', sans-serif; font-weight: 800; font-size: 18px; color: white; }
+  .auth-logo-name { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 24px; }
+  .auth-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 20px;
+    text-align: center; margin-bottom: 6px; }
+  .auth-sub { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 28px; }
+  .auth-error { background: rgba(255,107,107,0.1); border: 1px solid rgba(255,107,107,0.3);
+    border-radius: 10px; padding: 10px 14px; font-size: 13px; color: #FF6B6B;
+    margin-bottom: 16px; text-align: center; }
+  .auth-toggle { text-align: center; margin-top: 20px; font-size: 13px; color: var(--muted); }
+  .auth-toggle span { color: var(--accent); cursor: pointer; font-weight: 600; }
+  .auth-toggle span:hover { text-decoration: underline; }
+  .auth-user { display: flex; align-items: center; gap: 8px; padding: 6px 12px;
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 10px;
+    font-size: 12px; color: var(--muted); }
+  .auth-signout { background: none; border: none; color: var(--muted); cursor: pointer;
+    font-size: 11px; padding: 4px 8px; border-radius: 6px; font-family: 'DM Sans', sans-serif;
+    transition: all 0.15s; }
+  .auth-signout:hover { background: rgba(255,107,107,0.1); color: #FF6B6B; }
+
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -351,9 +411,29 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [activeNav, setActiveNav] = useState("tasks");
 
-  // ── Load data from Supabase on mount ──
+  // ── Auth state ──
+  const [session, setSession] = useState(null); // { access_token, user }
+  const [authMode, setAuthMode] = useState("login"); // "login" | "register"
+  const [authEmail, setAuthEmail] = useState("");
+  const [authPassword, setAuthPassword] = useState("");
+  const [authError, setAuthError] = useState("");
+  const [authLoading, setAuthLoading] = useState(false);
+
+  // ── Check saved session on mount ──
   useEffect(() => {
+    const saved = localStorage.getItem("taskly_session");
+    if (saved) {
+      try { setSession(JSON.parse(saved)); }
+      catch { localStorage.removeItem("taskly_session"); }
+    }
+    setLoading(false);
+  }, []);
+
+  // ── Load data when session is ready ──
+  useEffect(() => {
+    if (!session) return;
     async function loadData() {
+      setLoading(true);
       try {
         const [rawMembers, rawTasks] = await Promise.all([
           sb("members?select=*&order=id"),
@@ -365,7 +445,39 @@ export default function App() {
       finally { setLoading(false); }
     }
     loadData();
-  }, []);
+  }, [session]);
+
+  async function handleAuth() {
+    setAuthError("");
+    setAuthLoading(true);
+    try {
+      let data;
+      if (authMode === "register") {
+        data = await authSignUp(authEmail, authPassword);
+        if (!data.access_token) {
+          setAuthError("Registro exitoso. Revisa tu correo para confirmar tu cuenta.");
+          setAuthLoading(false);
+          return;
+        }
+      } else {
+        data = await authSignIn(authEmail, authPassword);
+      }
+      const sess = { access_token: data.access_token, user: data.user };
+      localStorage.setItem("taskly_session", JSON.stringify(sess));
+      setSession(sess);
+    } catch(e) {
+      setAuthError(e.message || "Error de autenticación");
+    }
+    setAuthLoading(false);
+  }
+
+  async function handleSignOut() {
+    if (session?.access_token) await authSignOut(session.access_token).catch(()=>{});
+    localStorage.removeItem("taskly_session");
+    setSession(null);
+    setMembers([]); setTasks([]);
+    setAuthEmail(""); setAuthPassword("");
+  }
   const [view, setView] = useState("kanban");
   const [search, setSearch] = useState("");
   const [filterStatus, setFilterStatus] = useState("all");
@@ -477,9 +589,49 @@ export default function App() {
   // ---- RENDER ----
   if (loading) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#0A0A0F",flexDirection:"column",gap:16}}>
-      <div style={{width:48,height:48,borderRadius:14,background:"linear-gradient(135deg,#7C6FFF,#FF6B9D)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:800,color:"#0A0A0F",fontFamily:"Syne,sans-serif"}}>T</div>
+      <div style={{width:48,height:48,borderRadius:14,background:"linear-gradient(135deg,#7C6FFF,#FF6B9D)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:22,fontWeight:800,color:"white",fontFamily:"Syne,sans-serif"}}>T</div>
       <div style={{color:"#6B6880",fontSize:14,fontFamily:"DM Sans,sans-serif"}}>Cargando Taskly...</div>
     </div>
+  );
+
+  // ── AUTH SCREEN ──
+  if (!session) return (
+    <>
+      <style>{css}</style>
+      <div className="auth-screen">
+        <div className="auth-card">
+          <div className="auth-logo">
+            <div className="auth-logo-dot">T</div>
+            <span className="auth-logo-name">Taskly</span>
+          </div>
+          <div className="auth-title">{authMode==="login"?"Bienvenido de vuelta":"Crear cuenta"}</div>
+          <div className="auth-sub">{authMode==="login"?"Ingresa con tu correo y contraseña":"Regístrate para acceder al equipo"}</div>
+          {authError && <div className="auth-error">{authError}</div>}
+          <div className="form-group">
+            <label className="form-label">Correo electrónico</label>
+            <input className="form-input" type="email" placeholder="tucorreo@empresa.com"
+              value={authEmail} onChange={e=>setAuthEmail(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&handleAuth()}/>
+          </div>
+          <div className="form-group">
+            <label className="form-label">Contraseña</label>
+            <input className="form-input" type="password" placeholder="••••••••"
+              value={authPassword} onChange={e=>setAuthPassword(e.target.value)}
+              onKeyDown={e=>e.key==="Enter"&&handleAuth()}/>
+          </div>
+          <button className="btn-submit" style={{width:"100%",padding:"12px",marginTop:8}}
+            onClick={handleAuth} disabled={authLoading}>
+            {authLoading?"Cargando...":(authMode==="login"?"Ingresar":"Registrarse")}
+          </button>
+          <div className="auth-toggle">
+            {authMode==="login"
+              ? <>¿No tienes cuenta? <span onClick={()=>{setAuthMode("register");setAuthError("");}}>Regístrate</span></>
+              : <>¿Ya tienes cuenta? <span onClick={()=>{setAuthMode("login");setAuthError("");}}>Inicia sesión</span></>
+            }
+          </div>
+        </div>
+      </div>
+    </>
   );
 
   return (
@@ -528,6 +680,11 @@ export default function App() {
                 + Agregar miembro
               </button>
             )}
+            <div className="auth-user">
+              <span>👤</span>
+              <span>{session.user?.email?.split("@")[0]}</span>
+              <button className="auth-signout" onClick={handleSignOut}>Salir</button>
+            </div>
           </div>
 
           {/* ===== TASKS VIEW ===== */}
@@ -750,125 +907,3 @@ export default function App() {
                           </div>
                         ))}
                       </div>
-                  }
-                </div>
-                <div className="btn-row">
-                  <button className="btn-cancel" onClick={()=>setTaskModal(null)}>Cancelar</button>
-                  <button className="btn-submit" onClick={saveTask}>{taskModal==="add"?"Crear Tarea":"Guardar Cambios"}</button>
-                </div>
-              </>
-            )}
-
-            {/* TASK DETAIL */}
-            {typeof taskModal==="object" && !taskModal._editing && (
-              <>
-                <div className="modal-header">
-                  <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <div className="priority-dot" style={{width:10,height:10,borderRadius:"50%",background:PRIORITIES[taskModal.priority].color,flexShrink:0}}/>
-                    <div className="modal-title" style={{fontSize:17}}>{taskModal.title}</div>
-                  </div>
-                  <div className="modal-close" onClick={()=>setTaskModal(null)}>✕</div>
-                </div>
-                <div className="detail-actions">
-                  {Object.entries(COLUMNS).map(([s,l])=>(
-                    <button key={s} className={`status-btn ${taskModal.status===s?`active-${s}`:""}`} onClick={()=>changeStatus(taskModal.id,s)}>{l}</button>
-                  ))}
-                  <button className="btn-delete" onClick={()=>deleteTask(taskModal.id)}>🗑 Eliminar</button>
-                </div>
-                {taskModal.description && (
-                  <div className="detail-field">
-                    <div className="detail-field-label">Descripción</div>
-                    <div className="detail-field-value" style={{color:"var(--muted)",lineHeight:1.6}}>{taskModal.description}</div>
-                  </div>
-                )}
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:16,marginBottom:16}}>
-                  <div className="detail-field">
-                    <div className="detail-field-label">Asignado a</div>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginTop:6}}>
-                      {getMember(taskModal.assignee) && <>
-                        <div className="avatar" style={{background:getMember(taskModal.assignee).color,width:32,height:32,borderRadius:9,fontSize:11}}>{getInitials(getMember(taskModal.assignee).name)}</div>
-                        <span style={{fontSize:14}}>{getMember(taskModal.assignee).name}</span>
-                      </>}
-                    </div>
-                  </div>
-                  <div className="detail-field">
-                    <div className="detail-field-label">Fecha límite</div>
-                    <div className={`detail-field-value ${getDueStatus(taskModal.dueDate)}`} style={{marginTop:6}}>
-                      {formatDate(taskModal.dueDate)}
-                      {getDueStatus(taskModal.dueDate)==="overdue"&&<span style={{fontSize:11,marginLeft:6}}>· Vencida</span>}
-                      {getDueStatus(taskModal.dueDate)==="soon"&&<span style={{fontSize:11,marginLeft:6,color:"#FFB347"}}>· Pronto</span>}
-                    </div>
-                  </div>
-                </div>
-                {taskModal.tags.length>0 && (
-                  <div className="detail-field">
-                    <div className="detail-field-label">Etiquetas</div>
-                    <div className="task-tags" style={{marginTop:6}}>{taskModal.tags.map(t=><span key={t} className="tag">{t}</span>)}</div>
-                  </div>
-                )}
-                <div className="btn-row">
-                  <button className="btn-cancel" onClick={()=>setTaskModal(null)}>Cerrar</button>
-                  <button className="btn-submit" onClick={()=>setTaskModal({...taskModal,_editing:true})}>✏️ Editar tarea</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ===== MEMBER MODAL ===== */}
-      {memberModal && (
-        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setMemberModal(null)}>
-          <div className="modal">
-            <div className="modal-header">
-              <div className="modal-title">{memberModal==="add"?"Nuevo Miembro":"Editar Miembro"}</div>
-              <div className="modal-close" onClick={()=>setMemberModal(null)}>✕</div>
-            </div>
-
-            {/* Preview avatar */}
-            <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:24,padding:16,background:"var(--bg)",borderRadius:12,border:"1px solid var(--border)"}}>
-              <div style={{width:56,height:56,borderRadius:16,background:memberForm.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:800,color:"#0A0A0F",flexShrink:0}}>
-                {memberForm.name ? getInitials(memberForm.name) : "?"}
-              </div>
-              <div>
-                <div style={{fontFamily:"Syne, sans-serif",fontWeight:700,fontSize:16}}>{memberForm.name||"Nombre del miembro"}</div>
-                <div style={{fontSize:13,color:"var(--muted)",marginTop:2}}>{memberForm.role||"Rol"}</div>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Nombre completo *</label>
-              <input className="form-input" placeholder="Ej: Juan Pérez" value={memberForm.name} onChange={e=>setMemberForm(f=>({...f,name:e.target.value}))}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Rol / Cargo</label>
-              <input className="form-input" placeholder="Ej: Desarrollador Frontend" value={memberForm.role} onChange={e=>setMemberForm(f=>({...f,role:e.target.value}))}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Correo electrónico</label>
-              <input className="form-input" type="email" placeholder="juan@empresa.com" value={memberForm.email} onChange={e=>setMemberForm(f=>({...f,email:e.target.value}))}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Color de avatar</label>
-              <div className="color-grid">
-                {AVATAR_COLORS.map(c=>(
-                  <div key={c} className={`color-swatch ${memberForm.color===c?"selected":""}`}
-                    style={{background:c}} onClick={()=>setMemberForm(f=>({...f,color:c}))}/>
-                ))}
-              </div>
-            </div>
-
-            <div className="btn-row">
-              {typeof memberModal==="object" && (
-                <button className="btn-cancel" style={{flex:"none",padding:"11px 16px",borderColor:"rgba(255,107,107,0.3)",color:"#FF6B6B"}}
-                  onClick={()=>deleteMember(memberModal.id)}>🗑 Eliminar</button>
-              )}
-              <button className="btn-cancel" onClick={()=>setMemberModal(null)}>Cancelar</button>
-              <button className="btn-submit" onClick={saveMember}>{memberModal==="add"?"Agregar Miembro":"Guardar Cambios"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
