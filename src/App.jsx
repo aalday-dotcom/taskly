@@ -1,8 +1,11 @@
 import { useState, useEffect } from "react";
 
-// ─── Supabase client ───────────────────────────────────────────────
+// ─── Supabase client (official SDK) ──────────────────────────────
+import { createClient } from "@supabase/supabase-js";
+
 const SUPABASE_URL = "https://yykfoloinyzonxszhggg.supabase.co";
 const SUPABASE_KEY = "sb_publishable__MQzesNrt7w9NInOJCNbuA_iRrWm3VX";
+const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 async function sb(path, options = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -20,34 +23,21 @@ async function sb(path, options = {}) {
   return text ? JSON.parse(text) : [];
 }
 
-// ─── Auth helpers ─────────────────────────────────────────────────
+// ─── Auth helpers (official SDK) ─────────────────────────────────
 async function authSignUp(email, password) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
-    method: "POST",
-    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-  const data = await res.json();
-  if (data.error) throw new Error(data.error.message || data.msg || "Error al registrar");
+  const { data, error } = await supabase.auth.signUp({ email, password });
+  if (error) throw new Error(error.message || "Error al registrar");
   return data;
 }
 
 async function authSignIn(email, password) {
-  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
-    method: "POST",
-    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
-    body: JSON.stringify({ email, password }),
-  });
-  const data = await res.json();
-  if (data.error || data.error_description) throw new Error(data.error_description || data.error || "Credenciales incorrectas");
-  return data; // { access_token, user, ... }
+  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) throw new Error(error.message || "Credenciales incorrectas");
+  return data; // { session, user }
 }
 
-async function authSignOut(token) {
-  await fetch(`${SUPABASE_URL}/auth/v1/logout`, {
-    method: "POST",
-    headers: { "apikey": SUPABASE_KEY, "Authorization": `Bearer ${token}` },
-  });
+async function authSignOut() {
+  await supabase.auth.signOut();
 }
 // ────────────────────────────────────────────────────────────────────
 
@@ -511,7 +501,7 @@ export default function App() {
       let data;
       if (authMode === "register") {
         data = await authSignUp(authEmail, authPassword);
-        if (!data.access_token) {
+        if (!data.session) {
           setAuthError("Registro exitoso. Revisa tu correo para confirmar tu cuenta.");
           setAuthLoading(false);
           return;
@@ -519,7 +509,7 @@ export default function App() {
       } else {
         data = await authSignIn(authEmail, authPassword);
       }
-      const sess = { access_token: data.access_token, user: data.user };
+      const sess = { access_token: data.session?.access_token, user: data.user };
       localStorage.setItem("taskly_session", JSON.stringify(sess));
       setSession(sess);
     } catch(e) {
@@ -529,7 +519,7 @@ export default function App() {
   }
 
   async function handleSignOut() {
-    if (session?.access_token) await authSignOut(session.access_token).catch(()=>{});
+    await authSignOut().catch(()=>{});
     localStorage.removeItem("taskly_session");
     setSession(null);
     setMembers([]); setTasks([]);
