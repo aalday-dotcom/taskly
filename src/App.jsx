@@ -1,11 +1,8 @@
 import { useState, useEffect } from "react";
 
-// ─── Supabase client (official SDK) ──────────────────────────────
-import { createClient } from "@supabase/supabase-js";
-
+// ─── Supabase client ─────────────────────────────────────────────
 const SUPABASE_URL = "https://yykfoloinyzonxszhggg.supabase.co";
 const SUPABASE_KEY = "sb_publishable__MQzesNrt7w9NInOJCNbuA_iRrWm3VX";
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
 
 async function sb(path, options = {}) {
   const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
@@ -23,21 +20,31 @@ async function sb(path, options = {}) {
   return text ? JSON.parse(text) : [];
 }
 
-// ─── Auth helpers (official SDK) ─────────────────────────────────
+// ─── Auth helpers ─────────────────────────────────────────────────
 async function authSignUp(email, password) {
-  const { data, error } = await supabase.auth.signUp({ email, password });
-  if (error) throw new Error(error.message || "Error al registrar");
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/signup`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (data.error) throw new Error(data.error.message || data.msg || "Error al registrar");
   return data;
 }
 
 async function authSignIn(email, password) {
-  const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-  if (error) throw new Error(error.message || "Credenciales incorrectas");
-  return data; // { session, user }
+  const res = await fetch(`${SUPABASE_URL}/auth/v1/token?grant_type=password`, {
+    method: "POST",
+    headers: { "apikey": SUPABASE_KEY, "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password }),
+  });
+  const data = await res.json();
+  if (data.error || data.error_description) throw new Error(data.error_description || data.error || "Credenciales incorrectas");
+  return data;
 }
 
 async function authSignOut() {
-  await supabase.auth.signOut();
+  return true;
 }
 // ────────────────────────────────────────────────────────────────────
 
@@ -528,7 +535,7 @@ export default function App() {
       let data;
       if (authMode === "register") {
         data = await authSignUp(authEmail, authPassword);
-        if (!data.session) {
+        if (!data.access_token) {
           setAuthError("Registro exitoso. Revisa tu correo para confirmar tu cuenta.");
           setAuthLoading(false);
           return;
@@ -536,7 +543,7 @@ export default function App() {
       } else {
         data = await authSignIn(authEmail, authPassword);
       }
-      const sess = { access_token: data.session?.access_token, user: data.user };
+      const sess = { access_token: data.access_token, user: data.user };
       localStorage.setItem("taskly_session", JSON.stringify(sess));
       setSession(sess);
     } catch(e) {
@@ -1147,7 +1154,4 @@ export default function App() {
                         <div key={i} className="attach-item">
                           <span className="attach-icon">{att.type?.includes("image")?"🖼️":att.type?.includes("pdf")?"📄":att.type?.includes("sheet")||att.name?.includes(".xls")?"📊":att.type?.includes("word")||att.name?.includes(".doc")?"📝":"📎"}</span>
                           <div className="attach-info">
-                            <div className="attach-name">{att.name}</div>
-                            <div className="attach-size">{formatFileSize(att.size||0)}</div>
-                          </div>
-                          <a href={att.url} target="_blank" rel="noopener noreferrer" className="attach-
+                            <div clas
