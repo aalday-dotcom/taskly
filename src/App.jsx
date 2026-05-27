@@ -104,7 +104,19 @@ function getDueStatus(d) {
   const diff = Math.ceil((due - today) / 86400000);
   if (diff < 0) return "overdue";
   if (diff <= 2) return "soon";
-  return "";
+  return "ok";
+}
+
+function getDueLabel(d) {
+  if (!d) return null;
+  const today = new Date(); today.setHours(0,0,0,0);
+  const due = new Date(d + "T00:00:00");
+  const diff = Math.ceil((due - today) / 86400000);
+  if (diff < 0) return { text: `Vencida hace ${Math.abs(diff)} día${Math.abs(diff)!==1?"s":""}`, color: "#FF4444", bg: "rgba(255,68,68,0.12)", icon: "🔴" };
+  if (diff === 0) return { text: "Vence hoy", color: "#FF4444", bg: "rgba(255,68,68,0.12)", icon: "🔴" };
+  if (diff === 1) return { text: "Vence mañana", color: "#FFB020", bg: "rgba(255,176,32,0.12)", icon: "🟡" };
+  if (diff <= 2) return { text: `Vence en ${diff} días`, color: "#FFB020", bg: "rgba(255,176,32,0.12)", icon: "🟡" };
+  return { text: `${diff} días restantes`, color: "#1B8C5E", bg: "rgba(27,140,94,0.12)", icon: "🟢" };
 }
 
 const css = `
@@ -218,8 +230,11 @@ const css = `
     background: var(--surface2); color: var(--muted); border: 1px solid var(--border); }
   .task-footer { display: flex; align-items: center; justify-content: space-between; }
   .task-due { font-size: 11px; color: var(--muted); display: flex; align-items: center; gap: 4px; }
-  .task-due.overdue { color: #FF6B6B; }
-  .task-due.soon { color: #FFB347; }
+  .task-due.overdue { color: #FF4444; font-weight: 700; }
+  .task-due.soon { color: #FFB020; font-weight: 600; }
+  .task-due.ok { color: #1B8C5E; }
+  .due-badge { display: inline-flex; align-items: center; gap: 4px; padding: 3px 8px;
+    border-radius: 6px; font-size: 11px; font-weight: 600; white-space: nowrap; }
 
   .list-view { flex: 1; overflow-y: auto; padding: 24px 28px; }
   .list-header { display: grid; grid-template-columns: 1fr 120px 100px 100px 80px;
@@ -423,6 +438,18 @@ const css = `
   .attach-download { font-size: 11px; color: #0A3D8F; text-decoration: none; padding: 2px 8px;
     border-radius: 6px; border: 1px solid rgba(10,61,143,0.2); flex-shrink: 0; }
   .attach-download:hover { background: rgba(10,61,143,0.06); }
+
+  /* ALERT BAR */
+  .alert-bar { display: flex; align-items: center; gap: 10px; padding: 10px 28px;
+    background: rgba(255,68,68,0.06); border-bottom: 1px solid rgba(255,68,68,0.15);
+    flex-shrink: 0; overflow-x: auto; }
+  .alert-bar-title { font-size: 12px; font-weight: 700; color: #FF4444; white-space: nowrap; }
+  .alert-item { display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px;
+    border-radius: 8px; font-size: 11px; font-weight: 600; cursor: pointer;
+    white-space: nowrap; border: 1px solid transparent; transition: opacity 0.15s; }
+  .alert-item:hover { opacity: 0.8; }
+  .alert-overdue { background: rgba(255,68,68,0.12); color: #FF4444; border-color: rgba(255,68,68,0.2); }
+  .alert-soon { background: rgba(255,176,32,0.12); color: #FFB020; border-color: rgba(255,176,32,0.2); }
 
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
@@ -773,6 +800,28 @@ export default function App() {
                 </div>
               ))}
             </div>
+            {/* ALERT BAR - overdue and soon tasks */}
+            {(() => {
+              const overdue = tasks.filter(t => t.status !== "done" && getDueStatus(t.dueDate) === "overdue");
+              const soon = tasks.filter(t => t.status !== "done" && getDueStatus(t.dueDate) === "soon");
+              if (overdue.length === 0 && soon.length === 0) return null;
+              return (
+                <div className="alert-bar">
+                  <span className="alert-bar-title">⚠ Alertas:</span>
+                  {overdue.map(t => (
+                    <div key={t.id} className="alert-item alert-overdue" onClick={()=>setTaskModal(t)}>
+                      🔴 {t.title} — {getDueLabel(t.dueDate)?.text}
+                    </div>
+                  ))}
+                  {soon.map(t => (
+                    <div key={t.id} className="alert-item alert-soon" onClick={()=>setTaskModal(t)}>
+                      🟡 {t.title} — {getDueLabel(t.dueDate)?.text}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
+
             {/* MEMBER FILTER ROW */}
             <div className="member-filter-row">
               <span className="mf-label">Personas:</span>
@@ -840,7 +889,14 @@ export default function App() {
                                 })}
                                 {(task.assignees||[]).length > 3 && <span style={{fontSize:10,color:"var(--muted)",marginLeft:4}}>+{task.assignees.length-3}</span>}
                               </div>
-                              {task.dueDate && <div className={`task-due ${due}`}>{due==="overdue"?"⚠":"📅"} {formatDate(task.dueDate)}</div>}
+                              {task.dueDate && (() => {
+                                const label = getDueLabel(task.dueDate);
+                                return label ? (
+                                  <div className="due-badge" style={{background:label.bg, color:label.color}}>
+                                    {label.icon} {formatDate(task.dueDate)}
+                                  </div>
+                                ) : null;
+                              })()}
                             </div>
                           </div>
                         );
@@ -878,7 +934,14 @@ export default function App() {
                       </div>
                       <div><span className={`status-badge badge-${task.status}`}>{COLUMNS[task.status]}</span></div>
                       <div style={{color:PRIORITIES[task.priority].color,fontSize:12,fontWeight:600}}>{PRIORITIES[task.priority].label}</div>
-                      <div className={`task-due ${due}`} style={{fontSize:12}}>{formatDate(task.dueDate)}</div>
+                      {task.dueDate && (() => {
+                        const label = getDueLabel(task.dueDate);
+                        return label ? (
+                          <div className="due-badge" style={{background:label.bg,color:label.color,fontSize:11}}>
+                            {label.icon} {formatDate(task.dueDate)}
+                          </div>
+                        ) : <span style={{fontSize:12,color:"var(--muted)"}}>—</span>;
+                      })()}
                     </div>
                   );
                 })}
@@ -1058,10 +1121,15 @@ export default function App() {
                   </div>
                   <div className="detail-field">
                     <div className="detail-field-label">Fecha límite</div>
-                    <div className={`detail-field-value ${getDueStatus(taskModal.dueDate)}`} style={{marginTop:6}}>
-                      {formatDate(taskModal.dueDate)}
-                      {getDueStatus(taskModal.dueDate)==="overdue"&&<span style={{fontSize:11,marginLeft:6}}>· Vencida</span>}
-                      {getDueStatus(taskModal.dueDate)==="soon"&&<span style={{fontSize:11,marginLeft:6,color:"#FFB347"}}>· Pronto</span>}
+                    <div style={{marginTop:6}}>
+                      {(() => {
+                        const label = getDueLabel(taskModal.dueDate);
+                        return label ? (
+                          <div className="due-badge" style={{background:label.bg,color:label.color,fontSize:13,padding:"5px 12px"}}>
+                            {label.icon} {formatDate(taskModal.dueDate)} — {label.text}
+                          </div>
+                        ) : <span style={{color:"var(--muted)"}}>—</span>;
+                      })()}
                     </div>
                   </div>
                 </div>
@@ -1082,75 +1150,4 @@ export default function App() {
                             <div className="attach-name">{att.name}</div>
                             <div className="attach-size">{formatFileSize(att.size||0)}</div>
                           </div>
-                          <a href={att.url} target="_blank" rel="noopener noreferrer" className="attach-download">⬇ Descargar</a>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="btn-row">
-                  <button className="btn-cancel" onClick={()=>setTaskModal(null)}>Cerrar</button>
-                  <button className="btn-submit" onClick={()=>setTaskModal({...taskModal,_editing:true})}>✏️ Editar tarea</button>
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* ===== MEMBER MODAL ===== */}
-      {memberModal && (
-        <div className="modal-overlay" onClick={e=>e.target===e.currentTarget&&setMemberModal(null)}>
-          <div className="modal">
-            <div className="modal-header">
-              <div className="modal-title">{memberModal==="add"?"Nuevo Miembro":"Editar Miembro"}</div>
-              <div className="modal-close" onClick={()=>setMemberModal(null)}>✕</div>
-            </div>
-
-            {/* Preview avatar */}
-            <div style={{display:"flex",alignItems:"center",gap:16,marginBottom:24,padding:16,background:"var(--bg)",borderRadius:12,border:"1px solid var(--border)"}}>
-              <div style={{width:56,height:56,borderRadius:16,background:memberForm.color,display:"flex",alignItems:"center",justifyContent:"center",fontSize:20,fontWeight:800,color:"#0A0A0F",flexShrink:0}}>
-                {memberForm.name ? getInitials(memberForm.name) : "?"}
-              </div>
-              <div>
-                <div style={{fontFamily:"Syne, sans-serif",fontWeight:700,fontSize:16}}>{memberForm.name||"Nombre del miembro"}</div>
-                <div style={{fontSize:13,color:"var(--muted)",marginTop:2}}>{memberForm.role||"Rol"}</div>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="form-label">Nombre completo *</label>
-              <input className="form-input" placeholder="Ej: Juan Pérez" value={memberForm.name} onChange={e=>setMemberForm(f=>({...f,name:e.target.value}))}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Rol / Cargo</label>
-              <input className="form-input" placeholder="Ej: Desarrollador Frontend" value={memberForm.role} onChange={e=>setMemberForm(f=>({...f,role:e.target.value}))}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Correo electrónico</label>
-              <input className="form-input" type="email" placeholder="juan@empresa.com" value={memberForm.email} onChange={e=>setMemberForm(f=>({...f,email:e.target.value}))}/>
-            </div>
-            <div className="form-group">
-              <label className="form-label">Color de avatar</label>
-              <div className="color-grid">
-                {AVATAR_COLORS.map(c=>(
-                  <div key={c} className={`color-swatch ${memberForm.color===c?"selected":""}`}
-                    style={{background:c}} onClick={()=>setMemberForm(f=>({...f,color:c}))}/>
-                ))}
-              </div>
-            </div>
-
-            <div className="btn-row">
-              {typeof memberModal==="object" && (
-                <button className="btn-cancel" style={{flex:"none",padding:"11px 16px",borderColor:"rgba(255,107,107,0.3)",color:"#FF6B6B"}}
-                  onClick={()=>deleteMember(memberModal.id)}>🗑 Eliminar</button>
-              )}
-              <button className="btn-cancel" onClick={()=>setMemberModal(null)}>Cancelar</button>
-              <button className="btn-submit" onClick={saveMember}>{memberModal==="add"?"Agregar Miembro":"Guardar Cambios"}</button>
-            </div>
-          </div>
-        </div>
-      )}
-    </>
-  );
-}
+                          <a href={att.url} target="_blank" rel="noopener noreferrer" className="attach-
