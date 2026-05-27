@@ -1,4 +1,4 @@
-mport { useState, useEffect } from "react";
+import { useState, useEffect } from "react";
 
 // ─── Supabase client ───────────────────────────────────────────────
 const SUPABASE_URL = "https://yykfoloinyzonxszhggg.supabase.co";
@@ -494,6 +494,18 @@ export default function App() {
 
   async function handleAuth() {
     setAuthError("");
+    if (!authEmail.trim() || !authPassword.trim()) {
+      setAuthError("Por favor ingresa tu correo y contraseña.");
+      return;
+    }
+    if (!authEmail.includes("@")) {
+      setAuthError("El correo no es válido.");
+      return;
+    }
+    if (authPassword.length < 6) {
+      setAuthError("La contraseña debe tener al menos 6 caracteres.");
+      return;
+    }
     setAuthLoading(true);
     try {
       let data;
