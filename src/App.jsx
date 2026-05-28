@@ -486,6 +486,37 @@ const css = `
   .comment-send:hover { opacity: 0.88; }
   .comment-send:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  /* NOTIFICATIONS */
+  .notif-btn { position: relative; background: var(--surface2); border: 1px solid var(--border);
+    border-radius: 10px; width: 36px; height: 36px; display: flex; align-items: center;
+    justify-content: center; cursor: pointer; font-size: 16px; flex-shrink: 0;
+    transition: all 0.15s; }
+  .notif-btn:hover { border-color: #0A3D8F; }
+  .notif-badge { position: absolute; top: -5px; right: -5px; min-width: 18px; height: 18px;
+    border-radius: 9px; background: #FF4444; color: white; font-size: 10px; font-weight: 800;
+    display: flex; align-items: center; justify-content: center; border: 2px solid var(--surface);
+    padding: 0 3px; }
+  .notif-panel { position: fixed; top: 70px; right: 20px; width: 340px; max-height: 480px;
+    background: var(--surface); border: 1px solid var(--border); border-radius: 16px;
+    box-shadow: 0 16px 48px rgba(0,0,0,0.2); z-index: 200; overflow: hidden;
+    display: flex; flex-direction: column; }
+  .notif-header { display: flex; align-items: center; justify-content: space-between;
+    padding: 16px 18px; border-bottom: 1px solid var(--border); }
+  .notif-title { font-family: "Syne",sans-serif; font-weight: 700; font-size: 15px; }
+  .notif-mark-all { font-size: 11px; color: #0A3D8F; cursor: pointer; font-weight: 600; }
+  .notif-mark-all:hover { text-decoration: underline; }
+  .notif-list { overflow-y: auto; flex: 1; }
+  .notif-item { display: flex; align-items: flex-start; gap: 10px; padding: 12px 18px;
+    border-bottom: 1px solid var(--border); cursor: pointer; transition: background 0.15s; }
+  .notif-item:hover { background: var(--surface2); }
+  .notif-item.unread { background: rgba(10,61,143,0.05); }
+  .notif-dot { width: 8px; height: 8px; border-radius: 50%; background: #0A3D8F;
+    flex-shrink: 0; margin-top: 5px; }
+  .notif-dot.read { background: transparent; border: 1px solid var(--border); }
+  .notif-msg { font-size: 13px; color: var(--text); line-height: 1.4; flex: 1; }
+  .notif-time { font-size: 10px; color: var(--muted); margin-top: 3px; }
+  .notif-empty { padding: 32px; text-align: center; color: var(--muted); font-size: 13px; }
+
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -536,10 +567,17 @@ export default function App() {
           sb("members?select=*&order=id"),
           sb("tasks?select=*&order=id"),
         ]);
-        setMembers(rawMembers.map(dbToMember));
+        const membersData = rawMembers.map(dbToMember);
+        setMembers(membersData);
         setTasks(rawTasks.map(dbToTask));
+        // Load notifications after members are set
+        const myMember = membersData.find(m => m.email === session?.user?.email);
+        if (myMember) {
+          const notifs = await sb(`notifications?member_id=eq.${myMember.id}&select=*&order=created_at.desc&limit=30`);
+          setNotifications(notifs);
+        }
       } catch(e) { console.error("Error cargando datos:", e); }
-      finally { setLoading(false); }
+      finally { setLoading(false); requestBrowserNotifPermission(); }
     }
     loadData();
   }, [session]);
@@ -600,6 +638,9 @@ export default function App() {
   const [comments, setComments] = useState({}); // { taskId: [comments] }
   const [newComment, setNewComment] = useState("");
   const [sendingComment, setSendingComment] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [showNotifs, setShowNotifs] = useState(false);
+  const unreadCount = notifications.filter(n => !n.read).length;
   const [taskForm, setTaskForm] = useState(EMPTY_TASK_FORM);
   const [memberForm, setMemberForm] = useState(EMPTY_MEMBER_FORM);
 
@@ -654,8 +695,66 @@ export default function App() {
         const [created] = await sb("tasks", { method: "POST", body: JSON.stringify(payload) });
         setTasks(ts => [...ts, dbToTask(created)]);
       }
+      // Notify assignees
+      const taskTitle = taskForm.title;
+      const myMember = members.find(m => m.email === session?.user?.email);
+      const myId = myMember?.id;
+      const othersToNotify = assignees.filter(id => id !== myId);
+      if (othersToNotify.length > 0) {
+        const msg = typeof taskModal === "object"
+          ? `${myMember?.name || "Alguien"} actualizó la tarea "${taskTitle}"`
+          : `${myMember?.name || "Alguien"} te asignó la tarea "${taskTitle}"`;
+        await createNotification(othersToNotify, msg, typeof taskModal === "object" ? taskModal.id : null);
+      }
     } catch(e) { console.error("Error guardando tarea:", e); }
     setTaskModal(null);
+  }
+
+  // ── Notifications ──
+  async function loadNotifications() {
+    if (!session) return;
+    const myMember = members.find(m => m.email === session.user?.email);
+    if (!myMember) return;
+    try {
+      const data = await sb(`notifications?member_id=eq.${myMember.id}&select=*&order=created_at.desc&limit=30`);
+      setNotifications(data);
+    } catch(e) { console.error("Error cargando notifs:", e); }
+  }
+
+  async function markAllRead() {
+    const myMember = members.find(m => m.email === session?.user?.email);
+    if (!myMember) return;
+    try {
+      await sb(`notifications?member_id=eq.${myMember.id}&read=eq.false`, { method: "PATCH", body: JSON.stringify({ read: true }) });
+      setNotifications(ns => ns.map(n => ({ ...n, read: true })));
+    } catch(e) { console.error("Error marcando leídas:", e); }
+  }
+
+  async function markRead(id) {
+    try {
+      await sb(`notifications?id=eq.${id}`, { method: "PATCH", body: JSON.stringify({ read: true }) });
+      setNotifications(ns => ns.map(n => n.id === id ? { ...n, read: true } : n));
+    } catch(e) { console.error("Error marcando leída:", e); }
+  }
+
+  async function createNotification(memberIds, message, taskId) {
+    for (const mid of memberIds) {
+      try {
+        await sb("notifications", { method: "POST", body: JSON.stringify({ member_id: mid, type: "task", message, task_id: taskId }) });
+      } catch(e) { console.error("Error creando notif:", e); }
+    }
+  }
+
+  function requestBrowserNotifPermission() {
+    if ("Notification" in window && Notification.permission === "default") {
+      Notification.requestPermission();
+    }
+  }
+
+  function showBrowserNotif(title, body) {
+    if ("Notification" in window && Notification.permission === "granted") {
+      new Notification(title, { body, icon: "/apple-touch-icon.png" });
+    }
   }
 
   async function loadComments(taskId) {
@@ -673,6 +772,15 @@ export default function App() {
       await sb("comments", { method: "POST", body: JSON.stringify({ task_id: taskId, member_id: memberId, text: newComment.trim() }) });
       setNewComment("");
       await loadComments(taskId);
+      // Notify other assignees
+      const task = tasks.find(t => t.id === taskId);
+      if (task) {
+        const myMember = members.find(m => m.id === memberId);
+        const others = (task.assignees||[task.assignee]).filter(id => id && id !== memberId);
+        if (others.length > 0) {
+          await createNotification(others, `${myMember?.name || "Alguien"} comentó en "${task.title}": ${newComment.trim().slice(0,60)}`, taskId);
+        }
+      }
     } catch(e) { console.error("Error enviando comentario:", e); }
     setSendingComment(false);
   }
@@ -841,6 +949,35 @@ export default function App() {
                 + Agregar miembro
               </button>
             )}
+            <div style={{position:"relative"}}>
+              <button className="notif-btn" onClick={()=>setShowNotifs(s=>!s)}>
+                🔔
+                {unreadCount > 0 && <div className="notif-badge">{unreadCount > 9 ? "9+" : unreadCount}</div>}
+              </button>
+              {showNotifs && (
+                <div className="notif-panel">
+                  <div className="notif-header">
+                    <span className="notif-title">Notificaciones {unreadCount>0&&<span style={{color:"#FF4444",fontSize:12}}>({unreadCount})</span>}</span>
+                    {unreadCount > 0 && <span className="notif-mark-all" onClick={markAllRead}>Marcar todas leídas</span>}
+                  </div>
+                  <div className="notif-list">
+                    {notifications.length === 0
+                      ? <div className="notif-empty">🔔 Sin notificaciones</div>
+                      : notifications.map(n => (
+                          <div key={n.id} className={`notif-item ${!n.read?"unread":""}`}
+                            onClick={()=>{ markRead(n.id); if(n.task_id){const t=tasks.find(x=>x.id===n.task_id);if(t){setTaskModal(t);setShowNotifs(false);}} }}>
+                            <div className={`notif-dot ${n.read?"read":""}`}/>
+                            <div>
+                              <div className="notif-msg">{n.message}</div>
+                              <div className="notif-time">{new Date(n.created_at).toLocaleDateString("es-CL",{day:"numeric",month:"short"})} {new Date(n.created_at).toLocaleTimeString("es-CL",{hour:"2-digit",minute:"2-digit"})}</div>
+                            </div>
+                          </div>
+                        ))
+                    }
+                  </div>
+                </div>
+              )}
+            </div>
             <div className="auth-user">
               <span>👤</span>
               <span>{session.user?.email?.split("@")[0]}</span>
