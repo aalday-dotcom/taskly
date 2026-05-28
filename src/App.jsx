@@ -165,7 +165,7 @@ const css = `
   .member-name { font-size: 13px; color: rgba(255,255,255,0.7); font-weight: 500; flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .member-filter-active { color: #FFFFFF !important; }
 
-  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; }
+  .main { flex: 1; display: flex; flex-direction: column; overflow: hidden; min-width: 0; }
   .topbar { display: flex; align-items: center; gap: 16px; padding: 20px 28px;
     border-bottom: 1px solid var(--border); background: #FFFFFF; flex-shrink: 0; box-shadow: 0 1px 8px rgba(0,40,100,0.07); }
   .page-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 22px;
@@ -204,9 +204,9 @@ const css = `
   .stat-num { font-family: 'Syne', sans-serif; font-weight: 800; font-size: 22px; line-height: 1; }
   .stat-label { font-size: 11px; color: var(--muted); margin-top: 2px; }
 
-  .kanban { display: flex; gap: 20px; padding: 24px 28px;
-    overflow-x: auto; flex: 1; align-items: flex-start; }
-  .column { min-width: 300px; max-width: 320px; flex-shrink: 0; }
+  .kanban { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; padding: 24px 28px;
+    overflow-y: auto; flex: 1; align-items: flex-start; }
+  .column { min-width: 0; width: 100%; }
   .col-header { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
   .col-title { font-family: 'Syne', sans-serif; font-weight: 700; font-size: 14px; }
   .col-count { background: var(--surface2); color: var(--muted); border-radius: 6px;
