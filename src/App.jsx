@@ -458,6 +458,34 @@ const css = `
   .alert-overdue { background: rgba(255,68,68,0.12); color: #FF4444; border-color: rgba(255,68,68,0.2); }
   .alert-soon { background: rgba(255,176,32,0.12); color: #FFB020; border-color: rgba(255,176,32,0.2); }
 
+  /* COMMENTS */
+  .comments-section { margin-top: 16px; border-top: 1px solid var(--border); padding-top: 16px; }
+  .comments-title { font-size: 11px; font-weight: 700; color: var(--muted);
+    letter-spacing: 0.8px; text-transform: uppercase; margin-bottom: 12px; }
+  .comments-list { display: flex; flex-direction: column; gap: 10px; margin-bottom: 14px;
+    max-height: 220px; overflow-y: auto; }
+  .comment-item { background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 10px 12px; }
+  .comment-header { display: flex; align-items: center; gap: 8px; margin-bottom: 5px; }
+  .comment-avatar { width: 22px; height: 22px; border-radius: 6px; display: flex;
+    align-items: center; justify-content: center; font-size: 8px; font-weight: 800;
+    color: #0A0A0F; flex-shrink: 0; }
+  .comment-author { font-size: 12px; font-weight: 600; color: var(--text); }
+  .comment-date { font-size: 10px; color: var(--muted); margin-left: auto; }
+  .comment-text { font-size: 13px; color: var(--text); line-height: 1.5; }
+  .comment-input-row { display: flex; gap: 8px; align-items: flex-end; }
+  .comment-input { flex: 1; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 12px; color: var(--text);
+    font-family: "DM Sans", sans-serif; font-size: 13px; outline: none;
+    resize: none; min-height: 40px; max-height: 100px; transition: border-color 0.15s; }
+  .comment-input:focus { border-color: #0A3D8F; }
+  .comment-send { padding: 9px 16px; background: linear-gradient(135deg,#0A3D8F,#1565C0);
+    border: none; border-radius: 10px; color: white; font-size: 13px; font-weight: 600;
+    cursor: pointer; transition: opacity 0.15s; font-family: "DM Sans",sans-serif;
+    white-space: nowrap; flex-shrink: 0; }
+  .comment-send:hover { opacity: 0.88; }
+  .comment-send:disabled { opacity: 0.5; cursor: not-allowed; }
+
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
@@ -569,12 +597,16 @@ export default function App() {
   const [taskModal, setTaskModal] = useState(null); // null | "add" | task object
   const [memberModal, setMemberModal] = useState(null); // null | "add" | member object
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [comments, setComments] = useState({}); // { taskId: [comments] }
+  const [newComment, setNewComment] = useState("");
+  const [sendingComment, setSendingComment] = useState(false);
   const [taskForm, setTaskForm] = useState(EMPTY_TASK_FORM);
   const [memberForm, setMemberForm] = useState(EMPTY_MEMBER_FORM);
 
   useEffect(() => {
     if (taskModal && typeof taskModal === "object") {
       setTaskForm({ ...taskModal, tags: taskModal.tags.join(", "), assignees: taskModal.assignees || (taskModal.assignee ? [taskModal.assignee] : []) });
+      if (!taskModal._editing) loadComments(taskModal.id);
     } else if (taskModal === "add") {
       setTaskForm({ ...EMPTY_TASK_FORM, assignee: members[0]?.id || null, assignees: members[0]?.id ? [members[0].id] : [] });
     }
@@ -624,6 +656,25 @@ export default function App() {
       }
     } catch(e) { console.error("Error guardando tarea:", e); }
     setTaskModal(null);
+  }
+
+  async function loadComments(taskId) {
+    try {
+      const data = await sb(`comments?task_id=eq.${taskId}&select=*&order=created_at`);
+      setComments(prev => ({ ...prev, [taskId]: data }));
+    } catch(e) { console.error("Error cargando comentarios:", e); }
+  }
+
+  async function sendComment(taskId) {
+    if (!newComment.trim() || sendingComment) return;
+    const memberId = session?.user ? members.find(m => m.email === session.user.email)?.id || members[0]?.id : members[0]?.id;
+    setSendingComment(true);
+    try {
+      await sb("comments", { method: "POST", body: JSON.stringify({ task_id: taskId, member_id: memberId, text: newComment.trim() }) });
+      setNewComment("");
+      await loadComments(taskId);
+    } catch(e) { console.error("Error enviando comentario:", e); }
+    setSendingComment(false);
   }
 
   async function handleFileUpload(e) {
@@ -699,7 +750,7 @@ export default function App() {
   // ---- RENDER ----
   if (loading) return (
     <div style={{display:"flex",alignItems:"center",justifyContent:"center",height:"100vh",background:"#EEF2F7",flexDirection:"column",gap:20}}>
-      <img src="https://yykfoloinyzonxszhggg.supabase.co/storage/v1/object/public/icons/icon-512.png" style={{width:140,borderRadius:16,boxShadow:"0 8px 32px rgba(10,40,100,0.2)"}} alt="CAM Logistic"/>
+      <div style={{width:120,height:120,borderRadius:20,background:"linear-gradient(135deg,#1565C0,#0A3D8F)",display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:4,boxShadow:"0 8px 32px rgba(10,40,100,0.3)"}}><span style={{fontSize:32,fontWeight:900,color:"white",fontFamily:"Syne,sans-serif",lineHeight:1}}>CAM</span><span style={{fontSize:12,fontWeight:600,color:"rgba(255,255,255,0.8)",letterSpacing:2}}>LOGISTIC</span></div>
       <div style={{color:"#5A7184",fontSize:14,fontFamily:"DM Sans,sans-serif"}}>Cargando...</div>
     </div>
   );
@@ -711,7 +762,7 @@ export default function App() {
       <div className="auth-screen">
         <div className="auth-card">
           <div className="auth-logo">
-            <div className="auth-logo-dot"><img src="https://yykfoloinyzonxszhggg.supabase.co/storage/v1/object/public/icons/icon-512.png" style={{width:"100%",height:"100%",objectFit:"cover"}} alt="CAM Logistic"/></div>
+            <div className="auth-logo-dot" style={{background:"linear-gradient(135deg,#1565C0,#0A3D8F)",borderRadius:20,display:"flex",alignItems:"center",justifyContent:"center",flexDirection:"column",gap:2}}><span style={{fontSize:28,fontWeight:900,color:"white",fontFamily:"Syne,sans-serif",lineHeight:1}}>CAM</span><span style={{fontSize:11,fontWeight:600,color:"rgba(255,255,255,0.8)",letterSpacing:2}}>LOGISTIC</span></div>
             <span className="auth-logo-name"></span>
           </div>
           <div className="auth-title">{authMode==="login"?"Bienvenido de vuelta":"Crear cuenta"}</div>
@@ -750,7 +801,7 @@ export default function App() {
       <div className="app">
         {/* SIDEBAR */}
         <aside className="sidebar">
-          <div className="logo" style={{justifyContent:"center",paddingBottom:16}}><img src="https://yykfoloinyzonxszhggg.supabase.co/storage/v1/object/public/icons/icon-512.png" style={{width:160,borderRadius:12,objectFit:"cover"}} alt="CAM Logistic"/></div>
+          <div className="logo" style={{justifyContent:"center",paddingBottom:16,flexDirection:"column",gap:4}}><div style={{width:48,height:48,borderRadius:12,background:"linear-gradient(135deg,#1565C0,#0A3D8F)",display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,fontWeight:900,color:"white",fontFamily:"Syne,sans-serif"}}>CAM</div><span style={{color:"white",fontSize:11,fontWeight:600,letterSpacing:1}}>LOGISTIC</span></div>
           <div className="nav-section">Menú</div>
           {[["tasks","📋","Tareas"],["team","👥","Equipo"]].map(([id, icon, label]) => (
             <button key={id} className={`nav-btn ${activeNav===id?"active":""}`} onClick={()=>setActiveNav(id)}>
@@ -1163,6 +1214,45 @@ export default function App() {
                     </div>
                   </div>
                 )}
+                {/* COMMENTS SECTION */}
+                <div className="comments-section">
+                  <div className="comments-title">💬 Observaciones e historial</div>
+                  <div className="comments-list">
+                    {(comments[taskModal.id]||[]).length === 0 && (
+                      <div style={{color:"var(--muted)",fontSize:13,textAlign:"center",padding:"12px 0"}}>
+                        Sin observaciones aún. Sé el primero en comentar.
+                      </div>
+                    )}
+                    {(comments[taskModal.id]||[]).map(c => {
+                      const m = getMember(c.member_id);
+                      const date = new Date(c.created_at);
+                      const dateStr = date.toLocaleDateString("es-CL",{day:"numeric",month:"short"}) + " " + date.toLocaleTimeString("es-CL",{hour:"2-digit",minute:"2-digit"});
+                      return (
+                        <div key={c.id} className="comment-item">
+                          <div className="comment-header">
+                            {m && <div className="comment-avatar" style={{background:m.color}}>{getInitials(m.name)}</div>}
+                            <span className="comment-author">{m?.name.split(" ")[0] || "Usuario"}</span>
+                            <span className="comment-date">{dateStr}</span>
+                          </div>
+                          <div className="comment-text">{c.text}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="comment-input-row">
+                    <textarea
+                      className="comment-input"
+                      placeholder="Escribe una observación..."
+                      value={newComment}
+                      onChange={e=>setNewComment(e.target.value)}
+                      onKeyDown={e=>{if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();sendComment(taskModal.id);}}}
+                    />
+                    <button className="comment-send" onClick={()=>sendComment(taskModal.id)} disabled={sendingComment||!newComment.trim()}>
+                      {sendingComment?"...":"Enviar"}
+                    </button>
+                  </div>
+                </div>
+
                 <div className="btn-row">
                   <button className="btn-cancel" onClick={()=>setTaskModal(null)}>Cerrar</button>
                   <button className="btn-submit" onClick={()=>setTaskModal({...taskModal,_editing:true})}>✏️ Editar tarea</button>
